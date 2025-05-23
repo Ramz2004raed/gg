@@ -33,8 +33,8 @@ neo4j_user = "neo4j"
 neo4j_password = "neo4j123"
 graph_driver = GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
 
-# --- إعدادات Redis ---
-redis_client = redis.Redis(host='localhost', port=6379, db=0)
+# --- إعدادات Redis مع البورت الصح ---
+redis_client = redis.Redis(host='localhost', port=16379, db=0)
 
 # --- إعدادات Cassandra ---
 profile = ExecutionProfile(consistency_level=ConsistencyLevel.ONE)
@@ -48,16 +48,16 @@ cassandra_session.execute("""
 cassandra_session.set_keyspace('healthcare')
 cassandra_session.execute("""
     CREATE TABLE IF NOT EXISTS patient_analytics (
+        region text,
         patient_id text,
         measurement_time timestamp,
         metric text,
         value double,
-        PRIMARY KEY ((patient_id), measurement_time, metric)
+        PRIMARY KEY ((region, patient_id), measurement_time, metric)
     ) WITH CLUSTERING ORDER BY (measurement_time DESC)
 """)
 
-# --- وظائف Neo4j ---
-
+# --- Neo4j CRUD ---
 def neo4j_create_doctor(doctor_id, name):
     with graph_driver.session() as session:
         session.run("MERGE (d:Doctor {id: $id}) ON CREATE SET d.name = $name", id=doctor_id, name=name)
@@ -76,12 +76,11 @@ def neo4j_create_treats_relation(doctor_id, patient_id):
         """, doctor_id=doctor_id, patient_id=patient_id)
         print(f"Created TREATS relation between Doctor {doctor_id} and Patient {patient_id} in Neo4j.")
 
-# --- Redis وظائف التنبيهات ---
-
+# --- Redis Alerts ---
 def redis_set_alert(patient_id, message):
     key = f"alert:{patient_id}"
     redis_client.set(key, message)
-    print(f"Alert set for {patient_id} in Redis.")
+    print(f"Alert set for {patient_id} in Redis: {message}")
 
 def redis_clear_alert(patient_id):
     key = f"alert:{patient_id}"
@@ -89,7 +88,6 @@ def redis_clear_alert(patient_id):
     print(f"Alert cleared for {patient_id} in Redis.")
 
 # --- كتابة البيانات في InfluxDB و Cassandra ---
-
 def influx_write_heartbeat(patient_id, value):
     point = Point("heartbeat") \
         .tag("patient_id", patient_id) \
@@ -98,45 +96,49 @@ def influx_write_heartbeat(patient_id, value):
     write_api.write(bucket=influx_bucket, org=influx_org, record=point)
     print(f"Wrote heartbeat {value:.2f} for {patient_id} to InfluxDB.")
 
-def cassandra_insert_analytics(patient_id, metric, value):
+def cassandra_insert_analytics(patient_id, region, metric, value):
     now = datetime.utcnow()
     cassandra_session.execute("""
-        INSERT INTO patient_analytics (patient_id, measurement_time, metric, value)
-        VALUES (%s, %s, %s, %s)
-    """, (patient_id, now, metric, float(value)))
-    print(f"Inserted analytics data for {patient_id} into Cassandra.")
+        INSERT INTO patient_analytics (region, patient_id, measurement_time, metric, value)
+        VALUES (%s, %s, %s, %s, %s)
+    """, (region, patient_id, now, metric, float(value)))
+    print(f"Inserted analytics data for {patient_id} in region {region} into Cassandra.")
 
-# --- التحقق من التنبيهات ---
+# --- التحقق من التنبيهات مع قيم نبض عشوائية طبيعية وغير طبيعية ---
+def check_and_alert(patient_id):
+    # 50% chance for abnormal, 50% normal heartbeat
+    if random.random() < 0.5:
+        heartbeat_value = random.uniform(40.0, 55.0)  # غير طبيعي منخفض
+    else:
+        heartbeat_value = random.uniform(65.0, 85.0)  # طبيعي
 
-def check_and_alert(patient_id, heartbeat_value):
     if heartbeat_value > 100 or heartbeat_value < 60:
         redis_set_alert(patient_id, f"Abnormal heartbeat detected: {heartbeat_value:.2f}")
     else:
         redis_clear_alert(patient_id)
 
-# --- المعالجة الرئيسية ---
+    return heartbeat_value
 
+# --- المعالجة الرئيسية ---
 def process_all():
-    # أولاً: إنشاء الأطباء في Neo4j بناءً على بيانات MongoDB
     doctors = list(doctors_collection.find())
     for doc in doctors:
         neo4j_create_doctor(doc["_id"], doc.get("name", "Unknown"))
 
-    # ثم: معالجة المرضى
     patients = list(patients_collection.find())
     for patient in patients:
         pid = patient["_id"]
         pname = patient.get("name", "Unknown")
         doctor_id = patient.get("doctor_id")  # ربط المريض بالطبيب في MongoDB
+        region = patient.get("region", "Unknown")
 
         neo4j_create_patient(pid, pname)
         if doctor_id:
             neo4j_create_treats_relation(doctor_id, pid)
 
-        heartbeat_value = random.uniform(50.0, 110.0)
+        heartbeat_value = check_and_alert(pid)
         influx_write_heartbeat(pid, heartbeat_value)
-        cassandra_insert_analytics(pid, 'heartbeat', heartbeat_value)
-        check_and_alert(pid, heartbeat_value)
+        cassandra_insert_analytics(pid, region, 'heartbeat', heartbeat_value)
 
         time.sleep(1)
 

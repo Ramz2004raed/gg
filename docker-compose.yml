@@ -36,13 +36,27 @@ services:
     volumes:
       - neo4j-data:/data
 
-  redis:
-    image: redis
-    container_name: redis
+  redis-master:
+    image: redis:7
+    container_name: redis-master
     ports:
-      - "6379:6379"
+    - "16379:6379"
+
+
     volumes:
-      - redis-data:/data
+      - redis-data-master:/data
+    command: redis-server --appendonly yes
+
+  redis-replica:
+    image: redis:7
+    container_name: redis-replica
+    depends_on:
+      - redis-master
+    ports:
+      - "6380:6379"
+    command: redis-server --replicaof redis-master 6379 --appendonly yes
+    volumes:
+      - redis-data-replica:/data
 
   cassandra:
     image: cassandra:4.0
@@ -56,5 +70,6 @@ volumes:
   mongo-data:
   influxdb-data:
   neo4j-data:
-  redis-data:
+  redis-data-master:
+  redis-data-replica:
   cassandra-data:

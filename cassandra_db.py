@@ -10,15 +10,15 @@ class CassandraHandler:
             WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}
         """)
         self.session.set_keyspace('healthcare')
-        self.session.execute("""
-            CREATE TABLE IF NOT EXISTS patient_analytics (
-                patient_id text,
-                measurement_time timestamp,
-                metric text,
-                value double,
-                PRIMARY KEY ((patient_id), measurement_time, metric)
-            ) WITH CLUSTERING ORDER BY (measurement_time DESC)
-        """)
+   cassandra_session.execute("""
+    CREATE TABLE IF NOT EXISTS patient_analytics (
+    patient_id text,
+    measurement_time timestamp,
+    metric text,
+    value double,
+    PRIMARY KEY ((patient_id), measurement_time, metric)
+     ) WITH CLUSTERING ORDER BY (measurement_time DESC)
+""")
 
     def insert_patient_metric(self, patient_id, metric, value):
         now = datetime.utcnow()
